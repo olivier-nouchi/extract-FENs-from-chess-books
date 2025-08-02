@@ -1,0 +1,9 @@
+page,diagram_number,players,year,solution_move,solution_move_with_notation,solution_full_move,solution_turn,fen,api_turn,image_path,image_page,header_page,solution_page
+1,27,Alekhine - Nimzowitsch,1927,f3,f3!,"8. f3! A nice set-up against the bishops on b7 and b4, both of which fight for the e4-square. 8.e4?! is",white,,,,1,1,1
+2,28,Kmoch - Alekhine,1927,b5,b5!,22... b5! Winning the d5-square for a heavy piece before White has time to interfere with a2-a4. 23.c5,black,,,,2,2,2
+2,29,Bogoljubow - Alekhine,1929,h5,h5!,"14... h5! Challenging the knight with extra force, as the e4-pawn is loose. There is no point in starting",black,,,,3,2,3
+3,30,Yates - Alekhine,1930,f4µ,f4µ,16... f4µ Black gains space and avoids giving White a chance for exf5. Black will follow up by,black,,,,3,3,4
+4,31,Bogoljubow - Alekhine,1934,Nd8,Nd8!,"9... Nd8! Black avoids gifting White an open c-file, and prepares to recapture on e6 with the knight.",black,,,,5,4,4
+4,32,Alekhine - Nimzowitsch,1934,e5,e5!=,"13... e5!= The bishop on c8 is no longer a problematic piece, and the potential queen exchange on d2",black,,,,5,4,5
+5,33,Alekhine - Johner,1934,Bc2,Bc2!,"9. Bc2! Avoiding simplifications is best, as Black’s light-squared bishop and queenside knight both",white,,,,5,5,5
+6,34,Lasker - Capablanca,1935,h4,h4!,"19. h4! With a few black pieces stuck on the queenside, White has time to open the h-file and go for",white,,,,5,6,6
