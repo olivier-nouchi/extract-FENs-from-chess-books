@@ -316,8 +316,8 @@ def find_solution_after_trigger(flattened_blocks, trigger_idx):
 
 def is_chessboard_like(image):
     """
-    Detects if an image contains a chessboard using contour analysis.
-    Enhanced with detailed logging for debugging.
+    Detects if an image contains a chessboard using multiple detection strategies.
+    Enhanced with size-based heuristics and improved contour analysis.
     """
     try:
         from config import ENABLE_DETAILED_LOGGING
@@ -327,6 +327,36 @@ def is_chessboard_like(image):
             print(f"📐 Image size: {image.size if hasattr(image, 'size') else 'Unknown'}")
             print(f"📊 Image mode: {image.mode if hasattr(image, 'mode') else 'Unknown'}")
 
+        # Strategy 1: Size-based heuristics
+        # Chessboards are typically square and reasonably large
+        if hasattr(image, 'size'):
+            width, height = image.size
+            aspect_ratio = width / height if height > 0 else 0
+            size_score = 0
+
+            # Check if image is roughly square (chessboard characteristic)
+            if 0.8 <= aspect_ratio <= 1.2:
+                size_score += 30
+                if ENABLE_DETAILED_LOGGING:
+                    print(f"✅ Size heuristic: Square-like aspect ratio {aspect_ratio:.2f} (+30 points)")
+
+            # Check if image is reasonably large (likely chessboard size)
+            if width >= 200 and height >= 200:
+                size_score += 25
+                if ENABLE_DETAILED_LOGGING:
+                    print(f"✅ Size heuristic: Large enough {width}x{height} (+25 points)")
+            elif width >= 150 and height >= 150:
+                size_score += 15
+                if ENABLE_DETAILED_LOGGING:
+                    print(f"✅ Size heuristic: Medium size {width}x{height} (+15 points)")
+
+            # Very likely chessboard based on size alone
+            if size_score >= 45:
+                if ENABLE_DETAILED_LOGGING:
+                    print(f"🎯 Size-based detection: {size_score} points >= 45 = ✅ LIKELY CHESSBOARD")
+                return True
+
+        # Strategy 2: Enhanced contour analysis
         # Convert PIL image to numpy array if needed
         if isinstance(image, Image.Image):
             image_array = np.array(image)
@@ -346,53 +376,59 @@ def is_chessboard_like(image):
             if ENABLE_DETAILED_LOGGING:
                 print(f"⚪ Image already grayscale")
 
-        # Apply blur and edge detection
-        blur = cv2.GaussianBlur(gray, (5, 5), 0)
-        edges = cv2.Canny(blur, 10, 50)
+        # Multiple edge detection attempts with different parameters
+        contour_scores = []
+
+        # Attempt 1: Standard parameters
+        blur1 = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges1 = cv2.Canny(blur1, 10, 50)
+        contours1, _ = cv2.findContours(edges1, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        squares1 = count_valid_squares(contours1, "Standard")
+        contour_scores.append(squares1)
+
+        # Attempt 2: More sensitive parameters
+        blur2 = cv2.GaussianBlur(gray, (3, 3), 0)
+        edges2 = cv2.Canny(blur2, 5, 25)
+        contours2, _ = cv2.findContours(edges2, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        squares2 = count_valid_squares(contours2, "Sensitive")
+        contour_scores.append(squares2)
+
+        # Attempt 3: Less sensitive but more stable
+        blur3 = cv2.GaussianBlur(gray, (7, 7), 0)
+        edges3 = cv2.Canny(blur3, 20, 80)
+        contours3, _ = cv2.findContours(edges3, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        squares3 = count_valid_squares(contours3, "Stable")
+        contour_scores.append(squares3)
+
+        # Take the best result from all attempts
+        max_squares = max(contour_scores)
 
         if ENABLE_DETAILED_LOGGING:
-            print(f"🔍 Applied Gaussian blur and Canny edge detection")
+            print(f"📊 Contour analysis results: {contour_scores}")
+            print(f"🏆 Best result: {max_squares} squares")
 
-        # Find contours
-        contours, _ = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        # Strategy 3: Combined scoring
+        # Lower threshold for contour detection, but combine with size heuristics
+        contour_threshold = 2  # Reduced from 4
 
-        if ENABLE_DETAILED_LOGGING:
-            print(f"📝 Found {len(contours)} contours")
+        if max_squares >= contour_threshold:
+            if ENABLE_DETAILED_LOGGING:
+                print(f"🎯 Contour-based detection: {max_squares} >= {contour_threshold} = ✅ CHESSBOARD")
+            return True
 
-        # Count square-like shapes
-        squares = 0
-        analyzed_contours = 0
-
-        for cnt in contours:
-            analyzed_contours += 1
-
-            # Approximate contour to polygon
-            epsilon = 0.03 * cv2.arcLength(cnt, True)
-            approx = cv2.approxPolyDP(cnt, epsilon, True)
-
-            # Check if it's roughly rectangular
-            if len(approx) == 4:
-                x, y, w, h = cv2.boundingRect(approx)
-                aspect_ratio = w / float(h)
-
-                # Filter by aspect ratio and size
-                if 0.4 < aspect_ratio < 1.8 and w > 5 and h > 5:
-                    squares += 1
-
-                    if ENABLE_DETAILED_LOGGING and squares <= 10:  # Log first 10 squares
-                        print(f"  ✅ Square {squares}: size {w}x{h}, ratio {aspect_ratio:.2f}")
+        # Strategy 4: Fallback for very geometric images
+        # If we have a perfect square image of reasonable size, it's likely a chessboard
+        if hasattr(image, 'size'):
+            width, height = image.size
+            if width == height and width >= 200:  # Perfect square, large enough
+                if ENABLE_DETAILED_LOGGING:
+                    print(f"🎯 Perfect square fallback: {width}x{height} = ✅ LIKELY CHESSBOARD")
+                return True
 
         if ENABLE_DETAILED_LOGGING:
-            print(f"📊 Analysis complete: {squares} valid squares found from {analyzed_contours} contours")
-            print(f"🎯 Threshold: {squares} >= 4 = {'✅ CHESSBOARD' if squares >= 4 else '❌ NOT CHESSBOARD'}")
+            print(f"🏁 Final result: ❌ NOT CHESSBOARD (max squares: {max_squares}, threshold: {contour_threshold})")
 
-        # Threshold for chessboard detection
-        result = squares >= 4
-
-        if ENABLE_DETAILED_LOGGING:
-            print(f"🏁 Final result: {'✅ IS CHESSBOARD' if result else '❌ NOT CHESSBOARD'}")
-
-        return result
+        return False
 
     except Exception as e:
         if ENABLE_DETAILED_LOGGING:
@@ -402,6 +438,39 @@ def is_chessboard_like(image):
         else:
             print(f"Error in chessboard detection: {e}")
         return False
+
+
+def count_valid_squares(contours, method_name):
+    """Count valid square-like shapes in contours."""
+    from config import ENABLE_DETAILED_LOGGING
+
+    squares = 0
+    analyzed_contours = 0
+
+    for cnt in contours:
+        analyzed_contours += 1
+
+        # Approximate contour to polygon
+        epsilon = 0.02 * cv2.arcLength(cnt, True)  # Slightly more flexible
+        approx = cv2.approxPolyDP(cnt, epsilon, True)
+
+        # Check if it's roughly rectangular (allow 4-6 sides for more flexibility)
+        if 4 <= len(approx) <= 6:
+            x, y, w, h = cv2.boundingRect(approx)
+            aspect_ratio = w / float(h) if h > 0 else 0
+
+            # More flexible size and ratio constraints
+            if 0.3 < aspect_ratio < 3.0 and w > 3 and h > 3:
+                squares += 1
+
+                if ENABLE_DETAILED_LOGGING and squares <= 5:  # Log first 5 squares
+                    print(
+                        f"  ✅ {method_name} Square {squares}: size {w}x{h}, ratio {aspect_ratio:.2f}, sides {len(approx)}")
+
+    if ENABLE_DETAILED_LOGGING:
+        print(f"📊 {method_name} analysis: {squares} valid squares from {analyzed_contours} contours")
+
+    return squares
 
 
 # Legacy functions for backward compatibility

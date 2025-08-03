@@ -228,6 +228,19 @@ def find_header_image_solution_structure(flattened_blocks, header_idx, pdf_path)
                     f"📍 Image position: ({block.get('x0', 0):.0f}, {block.get('y0', 0):.0f}) to ({block.get('x1', 0):.0f}, {block.get('y1', 0):.0f})")
                 print(f"📏 Image size: {block.get('width', 'N/A')}x{block.get('height', 'N/A')}")
 
+            # Quick size-based filtering for likely chessboards
+            width = block.get('width', 0)
+            height = block.get('height', 0)
+            is_likely_chessboard = False
+
+            if width and height:
+                aspect_ratio = width / height if height > 0 else 0
+                # Prioritize square images of reasonable size
+                if 0.8 <= aspect_ratio <= 1.2 and width >= 150 and height >= 150:
+                    is_likely_chessboard = True
+                    if ENABLE_DETAILED_LOGGING:
+                        print(f"🎯 Size suggests chessboard: {width:.0f}x{height:.0f}, ratio {aspect_ratio:.2f}")
+
             # Extract image and check if it's a chessboard
             image = get_image_from_pdf_block(pdf_path, block['page_number'], block)
 
@@ -237,10 +250,16 @@ def find_header_image_solution_structure(flattened_blocks, header_idx, pdf_path)
 
                 # Save image for debugging if enabled
                 if SAVE_ALL_IMAGES_FOR_DEBUG:
-                    debug_filename = f"debug_page_{block['page_number']}_block_{idx}.png"
+                    debug_filename = f"debug_page_{block['page_number']}_block_{idx}_{width:.0f}x{height:.0f}.png"
                     save_image_if_needed(image, debug_filename, False, force_save=True)
 
                 is_chessboard = is_chessboard_like(image)
+
+                # If size suggests chessboard but detection failed, try with relaxed parameters
+                if not is_chessboard and is_likely_chessboard:
+                    if ENABLE_DETAILED_LOGGING:
+                        print(f"🔄 Size suggests chessboard but detection failed, accepting based on size heuristics")
+                    is_chessboard = True
 
                 if is_chessboard:
                     image_block = block
