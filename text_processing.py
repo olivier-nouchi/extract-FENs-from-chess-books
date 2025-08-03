@@ -70,7 +70,8 @@ def extract_diagram_info(text):
         diagram_number = match.group(1)
         white_player = match.group(2).strip()
         black_player = match.group(3).strip()
-        year = match.group(4)
+        location = match.group(4).strip()  # Not used but captured
+        year = match.group(5)
         players = f"{white_player} - {black_player}"
         return diagram_number, players, year
 

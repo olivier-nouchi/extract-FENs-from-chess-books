@@ -9,9 +9,9 @@ IMAGES_FOLDER = "extracted_images"  # Subfolder for images (inside OUTPUT_FOLDER
 
 # PDF Processing
 PDF_PATH = "data_input/The Woodpecker Method 2 -- Axel Smith -- 2024.pdf"  # Path to PDF file
-PAGE_START = 29  # Set to specific page number to start from, or None for beginning
+PAGE_START = None  # Set to specific page number to start from, or None for beginning
 PAGE_END = None    # Set to specific page number to end at, or None for end of document
-MAX_DIAGRAMS = 25  # Maximum number of diagrams to extract, or None for all diagrams
+MAX_DIAGRAMS = None  # Maximum number of diagrams to extract, or None for all diagrams
 
 # API Settings
 USE_CHESSVISION_API = False
@@ -22,11 +22,11 @@ API_TIMEOUT = 10     # API request timeout (seconds)
 # Image Saving Flags
 SAVE_CHESSBOARD_IMAGES = False      # Save detected chessboard images
 SAVE_NON_CHESSBOARD_IMAGES = False  # Save non-chessboard images for debugging
-SAVE_ALL_IMAGES_FOR_DEBUG = True    # Save all images during processing for debugging
+SAVE_ALL_IMAGES_FOR_DEBUG = False    # Save all images during processing for debugging
 
 # Logging and Debug Flags
-ENABLE_DETAILED_LOGGING = True      # Show detailed block processing and order
-SHOW_BLOCK_INSPECTION = True        # Show block-by-block analysis on each page
+ENABLE_DETAILED_LOGGING = False      # Show detailed block processing and order
+SHOW_BLOCK_INSPECTION = False        # Show block-by-block analysis on each page
 
 # Search Parameters
 MAX_SEARCH_DISTANCE = 30  # Maximum blocks to search for related components (increased for cross-page)
@@ -42,7 +42,8 @@ MAX_SEARCH_DISTANCE = 30  # Maximum blocks to search for related components (inc
 DIAGRAM_STRUCTURE = "header_image_solution"  # Default structure for most chess books
 
 # PDF-specific patterns (customize these for different PDFs)
-DIAGRAM_HEADER_PATTERN = r'(\d+)\.\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s*[–-]\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),.*?(\d{4})'
+# Simplified pattern that captures any name format between markers
+DIAGRAM_HEADER_PATTERN = r'(\d+)\.\s*(.+?)\s*[–\-]\s*(.+?),\s*(.+?)\s+(\d{4})'
 SOLUTION_PATTERN = r'(\d+)(\.{1,3})\s*([a-hRNBQKO0-9][^\s\.,!?\n]*[!?]?)'  # More flexible pattern
 
 # Solution block detection
