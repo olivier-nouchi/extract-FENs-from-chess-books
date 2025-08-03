@@ -3,28 +3,15 @@
 Chess Diagram Extractor v1.1
 =============================
 
-Modular and configurable pipeline that automatically parses chess books (PDF format),
-detects chessboard diagrams, extracts metadata, and retrieves FEN notation.
-
-Key Features:
-- Cross-page diagram component detection
-- Random API call delays for rate limiting
-- Enhanced solution move extraction with proper encoding
-- CSV-safe text processing for chess notation
-- UTF-8 encoding with BOM for Excel compatibility
-- Modular architecture for easy maintenance
-- Configurable patterns for different PDF formats
-- Organized folder structure for inputs and outputs
+Clean rewrite of main processing script.
+Extracts chess diagrams from PDF files with enhanced cross-page detection,
+solution parsing, and configurable logging.
 
 Usage:
     python main.py
 
 Configuration:
     Edit config.py to customize settings
-
-Folder Structure:
-    data_input/     - Place PDF files here
-    data_output/    - All outputs go here
 """
 
 import csv
@@ -37,10 +24,60 @@ from diagram_processor import (
 )
 from text_processing import is_diagram_header, extract_diagram_info
 from config import (
-    PDF_PATH, PAGE_START, PAGE_END, MAX_DIAGRAMS, OUTPUT_CSV, OUTPUT_FOLDER,
+    PDF_PATH, PAGE_START, PAGE_END, MAX_DIAGRAMS, OUTPUT_FOLDER,
     USE_CHESSVISION_API, SAVE_CHESSBOARD_IMAGES, SAVE_NON_CHESSBOARD_IMAGES,
-    DIAGRAM_STRUCTURE
+    DIAGRAM_STRUCTURE, get_output_csv_path, ENABLE_DETAILED_LOGGING,
+    SHOW_BLOCK_INSPECTION
 )
+
+
+def log_detailed(message):
+    """Print message only if detailed logging is enabled."""
+    if ENABLE_DETAILED_LOGGING:
+        print(message)
+
+
+def inspect_page_blocks(blocks, page_number):
+    """Display detailed information about blocks on a page for debugging."""
+    if not SHOW_BLOCK_INSPECTION:
+        return
+
+    print(f"\n📄 PAGE {page_number} BLOCK INSPECTION")
+    print("-" * 60)
+    print(f"Total blocks: {len(blocks)}")
+
+    for i, block in enumerate(blocks):
+        block_type = block['type']
+        y0 = block.get('y0', 0)
+        x0 = block.get('x0', 0)
+
+        if block_type == 'text':
+            text = block.get('text', '').strip()
+            text_preview = text[:80] + "..." if len(text) > 80 else text
+            text_preview = text_preview.replace('\n', ' ').replace('\r', ' ')
+
+            print(f"  {i + 1:2d}. [TEXT] pos:({x0:.0f},{y0:.0f}) | \"{text_preview}\"")
+
+            # Import here to avoid circular imports
+            from text_processing import is_solution_trigger_block, is_solution_block
+
+            # Check for special block types
+            if is_diagram_header(text):
+                print(f"      🏷️  DIAGRAM HEADER detected")
+            elif is_solution_trigger_block(text):
+                print(f"      🎯 SOLUTION TRIGGER detected")
+            elif is_solution_block(text):
+                print(f"      🎲 SOLUTION BLOCK detected")
+
+        elif block_type == 'image':
+            width = block.get('width', 'N/A')
+            height = block.get('height', 'N/A')
+            x1 = block.get('x1', 0)
+            y1 = block.get('y1', 0)
+
+            print(f"  {i + 1:2d}. [IMAGE] pos:({x0:.0f},{y0:.0f}) to ({x1:.0f},{y1:.0f}) | size:{width}x{height}")
+
+    print("-" * 60)
 
 
 def print_header():
@@ -52,20 +89,18 @@ def print_header():
     print(f"📊 Pages: {PAGE_START or 'Start'} to {PAGE_END or 'End'}")
     print(f"🎯 Max diagrams: {MAX_DIAGRAMS or 'All'}")
     print(f"🏗️  Diagram structure: {DIAGRAM_STRUCTURE}")
+    print(f"📁 Output file: {get_output_csv_path()}")
     print(f"🌐 Chessvision API: {'✅ Enabled' if USE_CHESSVISION_API else '❌ Disabled'}")
     print(f"💾 Save chessboards: {'✅ Yes' if SAVE_CHESSBOARD_IMAGES else '❌ No'}")
     print(f"💾 Save non-chessboards: {'✅ Yes' if SAVE_NON_CHESSBOARD_IMAGES else '❌ No'}")
+    print(f"🔍 Detailed logging: {'✅ Enabled' if ENABLE_DETAILED_LOGGING else '❌ Disabled'}")
+    print(f"📋 Block inspection: {'✅ Enabled' if SHOW_BLOCK_INSPECTION else '❌ Disabled'}")
     print(f"📝 CSV encoding: UTF-8 with BOM")
     print("=" * 80)
 
 
 def extract_diagrams():
-    """
-    Main function to extract chess diagrams from PDF.
-
-    Returns:
-        list: List of extracted diagram dictionaries
-    """
+    """Main function to extract chess diagrams from PDF."""
     print_header()
 
     # Extract blocks from PDF
@@ -86,6 +121,12 @@ def extract_diagrams():
 
     print(f"📑 Processing {len(all_blocks_by_page)} pages with {len(flattened_blocks)} total blocks")
 
+    # Show detailed block inspection if enabled
+    if SHOW_BLOCK_INSPECTION:
+        for page_idx, blocks in enumerate(all_blocks_by_page):
+            page_number = page_idx + actual_start_page
+            inspect_page_blocks(blocks, page_number)
+
     results = []
     diagram_count = 0
     processed_headers = set()  # Track processed headers to avoid duplicates
@@ -103,7 +144,13 @@ def extract_diagrams():
 
             processed_headers.add(header_key)
 
-            print(f"\n🔍 Found diagram header on page {block['page_number']}: #{diagram_number} - {players} ({year})")
+            if ENABLE_DETAILED_LOGGING:
+                print(
+                    f"\n🔍 Found diagram header on page {block['page_number']}: #{diagram_number} - {players} ({year})")
+                print(f"🔍 Header block index: {block_idx}, global position in flattened blocks")
+            else:
+                print(
+                    f"\n🔍 Found diagram header on page {block['page_number']}: #{diagram_number} - {players} ({year})")
 
             # Find related image and solution blocks using configured structure
             image_block, solution_block, image_page = find_related_blocks_structured(
@@ -133,9 +180,15 @@ def extract_diagrams():
                     print(f"✅ Diagram #{diagram_count} extracted successfully")
 
                     # Show cross-page info if applicable
+                    cross_page_components = []
                     if image_page != block['page_number']:
+                        cross_page_components.append(f"Image on page {image_page}")
+                    if solution_block and solution_block['page_number'] != block['page_number']:
+                        cross_page_components.append(f"Solution on page {solution_block['page_number']}")
+
+                    if cross_page_components:
                         print(
-                            f"📄 Cross-page diagram: Header on page {block['page_number']}, Image on page {image_page}")
+                            f"📄 Cross-page diagram: Header on page {block['page_number']}, {', '.join(cross_page_components)}")
 
                     # Show progress if MAX_DIAGRAMS is set
                     if MAX_DIAGRAMS:
@@ -154,21 +207,19 @@ def extract_diagrams():
 
 
 def save_results(results):
-    """
-    Save results to CSV file with enhanced columns and proper encoding.
-
-    Args:
-        results: List of diagram dictionaries
-    """
+    """Save results to CSV file with enhanced columns and proper encoding."""
     # Create output directory if it doesn't exist
     if not os.path.exists(OUTPUT_FOLDER):
         os.makedirs(OUTPUT_FOLDER)
+
+    # Get dynamic output filename
+    output_file = get_output_csv_path()
 
     fieldnames = [
         # Basic information
         "page", "diagram_number", "players", "year",
 
-        # Solution information (enhanced in v2.0)
+        # Solution information
         "solution_move",  # Pure move like "f3", "b5" (cleaned)
         "solution_move_with_notation",  # Move with annotations like "f3!", "b5!"
         "solution_full_move",  # Full text like "8.f3! A nice set-up..."
@@ -183,22 +234,17 @@ def save_results(results):
     ]
 
     # Use UTF-8 encoding with BOM for better Excel compatibility
-    with open(OUTPUT_CSV, "w", newline="", encoding='utf-8-sig') as csvfile:
+    with open(output_file, "w", newline="", encoding='utf-8-sig') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames, quoting=csv.QUOTE_ALL)
         writer.writeheader()
         writer.writerows(results)
 
-    print(f"💾 Results saved to: {OUTPUT_CSV}")
+    print(f"💾 Results saved to: {output_file}")
     print(f"📊 CSV encoding: UTF-8 with BOM for Excel compatibility")
 
 
 def print_summary(results):
-    """
-    Print processing summary and statistics.
-
-    Args:
-        results: List of diagram dictionaries
-    """
+    """Print processing summary and statistics."""
     print(f"\n🎉 Processing complete!")
     print(f"📊 Extracted {len(results)} diagrams")
 
@@ -234,9 +280,7 @@ def print_summary(results):
 
 
 def main():
-    """
-    Main application entry point.
-    """
+    """Main application entry point."""
     try:
         # Extract diagrams from PDF
         results = extract_diagrams()
@@ -252,12 +296,15 @@ def main():
     except FileNotFoundError:
         print(f"❌ Error: PDF file '{PDF_PATH}' not found!")
         print("Please check the file path in config.py")
+        return []
     except KeyboardInterrupt:
         print("\n⏹️  Processing interrupted by user")
+        return []
     except Exception as e:
         print(f"❌ Unexpected error: {e}")
         import traceback
         traceback.print_exc()
+        return []
 
 
 if __name__ == "__main__":

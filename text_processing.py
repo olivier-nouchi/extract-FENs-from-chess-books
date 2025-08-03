@@ -9,11 +9,20 @@ from config import DIAGRAM_HEADER_PATTERN, SOLUTION_PATTERN
 def normalize_text(text):
     """
     Cleans OCR symbols and chess notation from text while preserving readability.
+    Enhanced to handle chess pieces in solution blocks like "*N*d2±"
     """
     replacements = {
-        # Chess pieces - convert to readable text
+        # Chess pieces - convert to readable text (including starred versions)
         '♔': 'K', '♕': 'Q', '♖': 'R', '♗': 'B', '♘': 'N', '♙': 'P',
         '♚': 'k', '♛': 'q', '♜': 'r', '♝': 'b', '♞': 'n', '♟': 'p',
+
+        # Handle starred chess pieces (common in some chess books)
+        '*♔*': 'K', '*♕*': 'Q', '*♖*': 'R', '*♗*': 'B', '*♘*': 'N', '*♙*': 'P',
+        '*♚*': 'k', '*♛*': 'q', '*♜*': 'r', '*♝*': 'b', '*♞*': 'n', '*♟*': 'p',
+
+        # Handle letter representations with stars (fallback)
+        '*K*': 'K', '*Q*': 'Q', '*R*': 'R', '*B*': 'B', '*N*': 'N', '*P*': 'P',
+        '*k*': 'k', '*q*': 'q', '*r*': 'r', '*b*': 'b', '*n*': 'n', '*p*': 'p',
 
         # Chess annotations - keep readable versions
         '†': '+', '‡': '++',
@@ -113,48 +122,62 @@ def clean_chess_move(move_text):
     return move_only
 
 
+def is_solution_block(text):
+    """
+    Check if text block is a solution block.
+    Now looks for chess move patterns anywhere in the text, not just at the start.
+    """
+    solution_details = extract_solution_details(text)
+    return solution_details is not None
+
+
 def extract_solution_details(text):
     """
     Extract detailed solution information from text.
+    Handles various formats including starred pieces like "17.*N*d2±"
 
     Args:
-        text: Text like "8.f3! A nice set-up against the bishops..." or
-              "22... b5! Winning the d5-square for a heavy piece..."
+        text: Solution text that may contain move notation anywhere
 
     Returns:
-        dict: {
-            'full_move': '8.f3! A nice set-up against...',
-            'move_number': '8',
-            'move_only': 'f3',
-            'move_with_notation': 'f3!',
-            'turn': 'white' or 'black',
-            'full_text': original text (unlimited length, CSV-safe)
-        }
+        dict: Solution details with extracted move information
     """
     # Normalize text but preserve readability for full_text
     normalized_text = normalize_text(text).strip()
-    match = re.search(SOLUTION_PATTERN, normalized_text)
 
-    if not match:
+    # Enhanced patterns to handle starred pieces and various formats
+    move_patterns = [
+        # Black moves with ... (including starred pieces)
+        r'(\d+)(\.{3})\s*(\*?[a-hRNBQKO0-9♔♕♖♗♘♙♚♛♜♝♞♟]\*?[^\s\.,!?\n]*[!?]?)',
+        # White moves with . (including starred pieces)
+        r'(\d+)(\.)\s*(\*?[a-hRNBQKO0-9♔♕♖♗♘♙♚♛♜♝♞♟]\*?[^\s\.,!?\n]*[!?]?)',
+    ]
+
+    best_match = None
+    best_position = len(normalized_text)  # Start with end of text
+
+    # Find the FIRST occurrence of any move pattern
+    for pattern in move_patterns:
+        for match in re.finditer(pattern, normalized_text):
+            if match.start() < best_position:
+                best_match = match
+                best_position = match.start()
+
+    if not best_match:
         return None
 
-    move_number = match.group(1)
-    dots = match.group(2)
-    move_text = match.group(3).strip()
+    move_number = best_match.group(1)
+    dots = best_match.group(2)
+    move_text = best_match.group(3).strip()
 
     # Determine turn based on dots
     turn = 'black' if '...' in dots else 'white'
 
-    # Extract just the move (first word, may include annotations like !, ?, +, #)
-    move_parts = move_text.split()
-    if move_parts:
-        move_with_notation = move_parts[0]  # e.g., "f3!", "b5!", "Nxe4+"
-        move_only = clean_chess_move(move_with_notation)
-    else:
-        move_with_notation = move_text
-        move_only = clean_chess_move(move_text)
+    # Clean the move notation
+    move_with_notation = move_text
+    move_only = clean_chess_move_precise(move_with_notation)
 
-    # Full move notation (preserve complete text without character limits)
+    # Full move notation
     full_move = f"{move_number}{dots} {move_text}"
 
     # Prepare CSV-safe full text
@@ -168,6 +191,49 @@ def extract_solution_details(text):
         'turn': turn,
         'full_text': csv_safe_text  # CSV-safe version of complete text
     }
+
+
+def clean_chess_move_precise(move_text):
+    """
+    Precisely clean a chess move by removing only annotations, keeping the core move intact.
+
+    Examples:
+    - "f5+" → "f5" (remove check)
+    - "Na5+" → "Na5" (keep piece + square, remove check)
+    - "Qxe5!" → "Qxe5" (keep capture notation)
+    - "0-0-0" → "0-0-0" (keep castling intact)
+
+    Args:
+        move_text: Raw move text like "f5+" or "Na5!"
+
+    Returns:
+        str: Clean move like "f5" or "Na5"
+    """
+    move_only = move_text.strip()
+
+    # Remove common chess annotations from the END only
+    # This preserves piece notation like "Na5" while removing "+"
+    annotations_to_remove = [
+        '!', '?', '+', '#', '!!', '??', '!?', '?!',
+        '±', '∓', '∞', '†', '‡', '≠', '≡', '½',
+        'μ', 'u', 'inf', '+=', '-+', '+/-',
+        '↑', '↓', '→', '←', '↗', '↘', '↙', '↖',
+        '⇄', '⊕', '⊖', '⊗', '⊙', '△', '▲', '▼',
+        '⌚', 'N', 'up', 'down', 'ne', 'se', 'sw', 'nw',
+        'exchange', 'with-idea', 'time', 'infinity', 'triangle'
+    ]
+
+    # Remove annotations from the end
+    for symbol in annotations_to_remove:
+        if move_only.endswith(symbol):
+            move_only = move_only[:-len(symbol)]
+
+    # Remove any remaining non-chess characters but preserve standard notation
+    # Keep: letters, numbers, castling (0), captures (x), promotion (=), hyphens (-)
+    valid_chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789x=-'
+    move_only = ''.join(c for c in move_only if c in valid_chars)
+
+    return move_only.strip()
 
 
 def prepare_csv_text(text):
@@ -213,41 +279,93 @@ def is_diagram_header(text):
     return diagram_num is not None
 
 
-def is_solution_block(text):
+def is_solution_trigger_block(text):
     """
-    Check if text block is a solution block.
+    Check if text block contains the solution trigger text like "Show/Hide Solution".
     """
-    solution_details = extract_solution_details(text)
-    return solution_details is not None
+    from config import SOLUTION_TRIGGER_TEXT
+    normalized_text = normalize_text(text).strip()
+    return SOLUTION_TRIGGER_TEXT.lower() in normalized_text.lower()
+
+
+def find_solution_after_trigger(flattened_blocks, trigger_idx):
+    """
+    Find the solution block that comes after a "Show/Hide Solution" trigger block.
+
+    Args:
+        flattened_blocks: List of all blocks across pages
+        trigger_idx: Index of the trigger block
+
+    Returns:
+        dict: Solution block or None if not found
+    """
+    # Look for the next text block after the trigger
+    for idx in range(trigger_idx + 1, min(len(flattened_blocks), trigger_idx + 5)):
+        block = flattened_blocks[idx]
+
+        if block['type'] == 'text':
+            # Check if this block contains a chess move
+            solution_details = extract_solution_details(block['text'])
+            if solution_details:
+                print(
+                    f"🎯 Found solution after trigger on page {block['page_number']} (distance: {idx - trigger_idx} blocks)")
+                return block
+
+    return None
 
 
 def is_chessboard_like(image):
     """
     Detects if an image contains a chessboard using contour analysis.
+    Enhanced with detailed logging for debugging.
     """
     try:
+        from config import ENABLE_DETAILED_LOGGING
+
+        if ENABLE_DETAILED_LOGGING:
+            print(f"🔍 Analyzing image for chessboard detection...")
+            print(f"📐 Image size: {image.size if hasattr(image, 'size') else 'Unknown'}")
+            print(f"📊 Image mode: {image.mode if hasattr(image, 'mode') else 'Unknown'}")
+
         # Convert PIL image to numpy array if needed
         if isinstance(image, Image.Image):
             image_array = np.array(image)
         else:
             image_array = image
 
+        if ENABLE_DETAILED_LOGGING:
+            print(f"🔢 Array shape: {image_array.shape}")
+
         # Convert to grayscale
         if len(image_array.shape) == 3:
             gray = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
+            if ENABLE_DETAILED_LOGGING:
+                print(f"🎨 Converted RGB to grayscale")
         else:
             gray = image_array
+            if ENABLE_DETAILED_LOGGING:
+                print(f"⚪ Image already grayscale")
 
         # Apply blur and edge detection
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
         edges = cv2.Canny(blur, 10, 50)
 
+        if ENABLE_DETAILED_LOGGING:
+            print(f"🔍 Applied Gaussian blur and Canny edge detection")
+
         # Find contours
         contours, _ = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
+        if ENABLE_DETAILED_LOGGING:
+            print(f"📝 Found {len(contours)} contours")
+
         # Count square-like shapes
         squares = 0
+        analyzed_contours = 0
+
         for cnt in contours:
+            analyzed_contours += 1
+
             # Approximate contour to polygon
             epsilon = 0.03 * cv2.arcLength(cnt, True)
             approx = cv2.approxPolyDP(cnt, epsilon, True)
@@ -261,11 +379,28 @@ def is_chessboard_like(image):
                 if 0.4 < aspect_ratio < 1.8 and w > 5 and h > 5:
                     squares += 1
 
+                    if ENABLE_DETAILED_LOGGING and squares <= 10:  # Log first 10 squares
+                        print(f"  ✅ Square {squares}: size {w}x{h}, ratio {aspect_ratio:.2f}")
+
+        if ENABLE_DETAILED_LOGGING:
+            print(f"📊 Analysis complete: {squares} valid squares found from {analyzed_contours} contours")
+            print(f"🎯 Threshold: {squares} >= 4 = {'✅ CHESSBOARD' if squares >= 4 else '❌ NOT CHESSBOARD'}")
+
         # Threshold for chessboard detection
-        return squares >= 4
+        result = squares >= 4
+
+        if ENABLE_DETAILED_LOGGING:
+            print(f"🏁 Final result: {'✅ IS CHESSBOARD' if result else '❌ NOT CHESSBOARD'}")
+
+        return result
 
     except Exception as e:
-        print(f"Error in chessboard detection: {e}")
+        if ENABLE_DETAILED_LOGGING:
+            print(f"❌ Error in chessboard detection: {e}")
+            import traceback
+            traceback.print_exc()
+        else:
+            print(f"Error in chessboard detection: {e}")
         return False
 
 
