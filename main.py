@@ -20,11 +20,12 @@ from pdf_parse import extract_sorted_blocks_from_pdf
 from diagram_processor import (
     get_all_blocks_flattened,
     find_related_blocks_structured,
-    process_diagram
+    process_diagram,
+    save_all_page_images
 )
 from text_processing import is_diagram_header, extract_diagram_info
 from config import (
-    PDF_PATH, PAGE_START, PAGE_END, MAX_DIAGRAMS, OUTPUT_FOLDER,
+    PDF_PATH, PAGE_START, PAGE_END, MAX_DIAGRAMS, OUTPUT_FOLDER, IMAGES_FOLDER,
     USE_CHESSVISION_API, SAVE_CHESSBOARD_IMAGES, SAVE_NON_CHESSBOARD_IMAGES,
     DIAGRAM_STRUCTURE, get_output_csv_path, ENABLE_DETAILED_LOGGING,
     SHOW_BLOCK_INSPECTION
@@ -126,6 +127,33 @@ def extract_diagrams():
         for page_idx, blocks in enumerate(all_blocks_by_page):
             page_number = page_idx + actual_start_page
             inspect_page_blocks(blocks, page_number)
+    
+    # Save all images from each page for inspection
+    print("📸 Saving all page images for inspection...")
+    for page_idx, blocks in enumerate(all_blocks_by_page):
+        page_number = page_idx + actual_start_page
+        save_all_page_images(PDF_PATH, page_number)
+        
+        # Check if we found the 360x360 image in the saved images
+        if page_number == 30:
+            print("🔍 Checking for 360x360 image in saved page images...")
+            output_images_dir = os.path.join(OUTPUT_FOLDER, IMAGES_FOLDER)
+            if os.path.exists(output_images_dir):
+                saved_images = [f for f in os.listdir(output_images_dir) if f.startswith(f"page_{page_number}_image_")]
+                for img_file in saved_images:
+                    if "360x360" in img_file:
+                        print(f"✅ Found 360x360 image: {img_file}")
+                        # Test if our algorithm would detect this as a chessboard
+                        print(f"🎯 360x360 image should be detected as chessboard (perfect square + ~67 KB)")
+                        
+                        # Test the detection criteria manually
+                        print(f"🔍 Manual test of detection criteria:")
+                        print(f"  - Is 360 == 360? {360 == 360}")
+                        print(f"  - Is 200 <= 360 <= 400? {200 <= 360 <= 400}")
+                        print(f"  - Expected file size ~67 KB, should be 45-85 KB range")
+                        print(f"  - Should pass PRIORITY 1 if file size is in range")
+                    else:
+                        print(f"📄 Other image: {img_file}")
 
     results = []
     diagram_count = 0

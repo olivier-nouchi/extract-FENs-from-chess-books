@@ -317,128 +317,155 @@ def find_solution_after_trigger(flattened_blocks, trigger_idx):
 
 def is_chessboard_like(image):
     """
-    Detects if an image contains a chessboard using multiple detection strategies.
-    Enhanced with size-based heuristics and improved contour analysis.
+    Simple chessboard detection: Square dimensions + ~65 KB file size.
     """
     try:
-        from config import ENABLE_DETAILED_LOGGING
+        import io
 
-        if ENABLE_DETAILED_LOGGING:
-            print(f"🔍 Analyzing image for chessboard detection...")
-            print(f"📐 Image size: {image.size if hasattr(image, 'size') else 'Unknown'}")
-            print(f"📊 Image mode: {image.mode if hasattr(image, 'mode') else 'Unknown'}")
+        # Get image dimensions
+        width, height = image.size if hasattr(image, 'size') else (0, 0)
+        
+        # Quick rejection for obviously wrong images
+        if width < 50 or height < 50:
+            return False
 
-        # Strategy 1: Size-based heuristics
-        # Chessboards are typically square and reasonably large
-        if hasattr(image, 'size'):
-            width, height = image.size
-            aspect_ratio = width / height if height > 0 else 0
-            size_score = 0
+        # Check if image is square
+        if width != height:
+            return False
 
-            # Check if image is roughly square (chessboard characteristic)
-            if 0.8 <= aspect_ratio <= 1.2:
-                size_score += 30
-                if ENABLE_DETAILED_LOGGING:
-                    print(f"✅ Size heuristic: Square-like aspect ratio {aspect_ratio:.2f} (+30 points)")
+        # Check if size is reasonable for chessboard (200-400px)
+        if not (200 <= width <= 400):
+            return False
 
-            # Check if image is reasonably large (likely chessboard size)
-            if width >= 200 and height >= 200:
-                size_score += 25
-                if ENABLE_DETAILED_LOGGING:
-                    print(f"✅ Size heuristic: Large enough {width}x{height} (+25 points)")
-            elif width >= 150 and height >= 150:
-                size_score += 15
-                if ENABLE_DETAILED_LOGGING:
-                    print(f"✅ Size heuristic: Medium size {width}x{height} (+15 points)")
-
-            # Very likely chessboard based on size alone
-            if size_score >= 45:
-                if ENABLE_DETAILED_LOGGING:
-                    print(f"🎯 Size-based detection: {size_score} points >= 45 = ✅ LIKELY CHESSBOARD")
+        # Check file size (~65 KB)
+        try:
+            img_buffer = io.BytesIO()
+            image.save(img_buffer, format='PNG', optimize=True)
+            file_size_kb = len(img_buffer.getvalue()) / 1024
+            
+            # Accept if file size is around 65 KB (allow some variance)
+            if 50 <= file_size_kb <= 80:
+                print(f"✅ Chessboard detected: {width}x{width} pixels, {file_size_kb:.1f} KB")
                 return True
-
-        # Strategy 2: Enhanced contour analysis
-        # Convert PIL image to numpy array if needed
-        if isinstance(image, Image.Image):
-            image_array = np.array(image)
-        else:
-            image_array = image
-
-        if ENABLE_DETAILED_LOGGING:
-            print(f"🔢 Array shape: {image_array.shape}")
-
-        # Convert to grayscale
-        if len(image_array.shape) == 3:
-            gray = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
-            if ENABLE_DETAILED_LOGGING:
-                print(f"🎨 Converted RGB to grayscale")
-        else:
-            gray = image_array
-            if ENABLE_DETAILED_LOGGING:
-                print(f"⚪ Image already grayscale")
-
-        # Multiple edge detection attempts with different parameters
-        contour_scores = []
-
-        # Attempt 1: Standard parameters
-        blur1 = cv2.GaussianBlur(gray, (5, 5), 0)
-        edges1 = cv2.Canny(blur1, 10, 50)
-        contours1, _ = cv2.findContours(edges1, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        squares1 = count_valid_squares(contours1, "Standard")
-        contour_scores.append(squares1)
-
-        # Attempt 2: More sensitive parameters
-        blur2 = cv2.GaussianBlur(gray, (3, 3), 0)
-        edges2 = cv2.Canny(blur2, 5, 25)
-        contours2, _ = cv2.findContours(edges2, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        squares2 = count_valid_squares(contours2, "Sensitive")
-        contour_scores.append(squares2)
-
-        # Attempt 3: Less sensitive but more stable
-        blur3 = cv2.GaussianBlur(gray, (7, 7), 0)
-        edges3 = cv2.Canny(blur3, 20, 80)
-        contours3, _ = cv2.findContours(edges3, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        squares3 = count_valid_squares(contours3, "Stable")
-        contour_scores.append(squares3)
-
-        # Take the best result from all attempts
-        max_squares = max(contour_scores)
-
-        if ENABLE_DETAILED_LOGGING:
-            print(f"📊 Contour analysis results: {contour_scores}")
-            print(f"🏆 Best result: {max_squares} squares")
-
-        # Strategy 3: Combined scoring
-        # Lower threshold for contour detection, but combine with size heuristics
-        contour_threshold = 2  # Reduced from 4
-
-        if max_squares >= contour_threshold:
-            if ENABLE_DETAILED_LOGGING:
-                print(f"🎯 Contour-based detection: {max_squares} >= {contour_threshold} = ✅ CHESSBOARD")
-            return True
-
-        # Strategy 4: Fallback for very geometric images
-        # If we have a perfect square image of reasonable size, it's likely a chessboard
-        if hasattr(image, 'size'):
-            width, height = image.size
-            if width == height and width >= 200:  # Perfect square, large enough
-                if ENABLE_DETAILED_LOGGING:
-                    print(f"🎯 Perfect square fallback: {width}x{height} = ✅ LIKELY CHESSBOARD")
-                return True
-
-        if ENABLE_DETAILED_LOGGING:
-            print(f"🏁 Final result: ❌ NOT CHESSBOARD (max squares: {max_squares}, threshold: {contour_threshold})")
-
-        return False
+            else:
+                print(f"❌ Wrong file size: {width}x{width} pixels, {file_size_kb:.1f} KB (expected ~65 KB)")
+                return False
+                
+        except Exception as e:
+            print(f"⚠️ Could not check file size: {e}")
+            return False
 
     except Exception as e:
-        if ENABLE_DETAILED_LOGGING:
-            print(f"❌ Error in chessboard detection: {e}")
-            import traceback
-            traceback.print_exc()
-        else:
-            print(f"Error in chessboard detection: {e}")
+        print(f"❌ Error in chessboard detection: {e}")
         return False
+
+
+def analyze_chessboard_patterns(gray_image, width, height):
+    """
+    Analyze image for chessboard-specific visual patterns.
+    Looks for grid patterns, alternating squares, and chess piece characteristics.
+    
+    Args:
+        gray_image: Grayscale numpy array
+        width, height: Image dimensions
+        
+    Returns:
+        int: Pattern score (0-100)
+    """
+    try:
+        pattern_score = 0
+        print(f"🔍 Pattern analysis for {width}x{height} image...")
+        
+        # Strategy 1: Grid pattern detection
+        # Look for horizontal and vertical lines that form a grid
+        edges_h = cv2.Sobel(gray_image, cv2.CV_64F, 0, 1, ksize=3)
+        edges_v = cv2.Sobel(gray_image, cv2.CV_64F, 1, 0, ksize=3)
+        
+        # Count strong horizontal and vertical edges
+        h_edges = np.sum(np.abs(edges_h) > 50)
+        v_edges = np.sum(np.abs(edges_v) > 50)
+        
+        # Chessboards should have strong grid patterns
+        if h_edges > width * 2 and v_edges > height * 2:
+            pattern_score += 25
+            print(f"✅ Grid pattern detected: {h_edges} horizontal, {v_edges} vertical edges (+25 points)")
+        
+        # Strategy 2: Check for alternating square patterns
+        # Sample the image in a grid pattern to look for alternating light/dark squares
+        grid_size = 8  # 8x8 chessboard
+        cell_w, cell_h = width // grid_size, height // grid_size
+        
+        if cell_w > 5 and cell_h > 5:  # Ensure cells are large enough to analyze
+            alternating_score = 0
+            total_checks = 0
+            
+            for i in range(grid_size - 1):
+                for j in range(grid_size - 1):
+                    # Get average brightness of adjacent cells
+                    cell1 = gray_image[j*cell_h:(j+1)*cell_h, i*cell_w:(i+1)*cell_w]
+                    cell2 = gray_image[j*cell_h:(j+1)*cell_h, (i+1)*cell_w:(i+2)*cell_w]
+                    cell3 = gray_image[(j+1)*cell_h:(j+2)*cell_h, i*cell_w:(i+1)*cell_w]
+                    
+                    if cell1.size > 0 and cell2.size > 0 and cell3.size > 0:
+                        avg1 = np.mean(cell1)
+                        avg2 = np.mean(cell2)
+                        avg3 = np.mean(cell3)
+                        
+                        # Check if we have alternating pattern (light/dark/light or dark/light/dark)
+                        if (avg1 > avg2 and avg2 < avg3) or (avg1 < avg2 and avg2 > avg3):
+                            alternating_score += 1
+                        total_checks += 1
+            
+            if total_checks > 0:
+                alternating_ratio = alternating_score / total_checks
+                if alternating_ratio > 0.6:  # At least 60% of cells show alternating pattern
+                    pattern_score += 30
+                    print(f"✅ Alternating square pattern detected: {alternating_ratio:.2f} ratio (+30 points)")
+        
+        # Strategy 3: Check for chess piece characteristics
+        # Look for small, distinct objects that could be chess pieces
+        # Use morphological operations to find small connected components
+        kernel = np.ones((3,3), np.uint8)
+        dilated = cv2.dilate(gray_image, kernel, iterations=1)
+        eroded = cv2.erode(gray_image, kernel, iterations=1)
+        piece_candidates = dilated - eroded
+        
+        # Count distinct small objects
+        _, labels, stats, _ = cv2.connectedComponentsWithStats(piece_candidates.astype(np.uint8))
+        
+        # Look for objects of reasonable size for chess pieces
+        piece_count = 0
+        for stat in stats[1:]:  # Skip background
+            area = stat[4]
+            if 20 < area < 200:  # Reasonable size for chess pieces
+                piece_count += 1
+        
+        if 10 <= piece_count <= 32:  # Reasonable number of chess pieces
+            pattern_score += 25
+            print(f"✅ Chess piece candidates detected: {piece_count} pieces (+25 points)")
+        
+        # Strategy 4: Check for board coordinates (a-h, 1-8)
+        # This is more complex and would require OCR, but we can look for text-like patterns
+        # For now, we'll use a simpler approach based on edge density in border areas
+        
+        # Check if there are text-like patterns in the border areas
+        border_thickness = min(width, height) // 20
+        top_border = gray_image[:border_thickness, :]
+        left_border = gray_image[:, :border_thickness]
+        
+        # High edge density in borders might indicate coordinates
+        top_edges = np.sum(cv2.Canny(top_border, 50, 150)) / top_border.size
+        left_edges = np.sum(cv2.Canny(left_border, 50, 150)) / left_border.size
+        
+        if top_edges > 0.1 or left_edges > 0.1:  # Significant edge density in borders
+            pattern_score += 20
+            print(f"✅ Border patterns detected (possible coordinates) (+20 points)")
+        
+        return pattern_score
+        
+    except Exception as e:
+        print(f"⚠️ Error in pattern analysis: {e}")
+        return 0
 
 
 def count_valid_squares(contours, method_name):

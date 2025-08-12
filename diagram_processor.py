@@ -12,17 +12,13 @@ from config import (
     SAVE_CHESSBOARD_IMAGES, SAVE_NON_CHESSBOARD_IMAGES,
     OUTPUT_FOLDER, IMAGES_FOLDER, USE_CHESSVISION_API, MAX_SEARCH_DISTANCE,
     DIAGRAM_STRUCTURE, ENABLE_DETAILED_LOGGING, SHOW_BLOCK_INSPECTION,
-    SAVE_ALL_IMAGES_FOR_DEBUG
+    SAVE_ALL_IMAGES_FOR_DEBUG, SAVE_ALL_PAGE_IMAGES
 )
 
 
 def get_image_from_pdf_block(pdf_path, page_num, image_block):
     """
     Extract image data directly from PDF block without saving to disk.
-    Fixed to properly identify and extract the correct image based on position.
-
-    Returns:
-        PIL Image object or None
     """
     try:
         doc = fitz.open(pdf_path)
@@ -32,24 +28,21 @@ def get_image_from_pdf_block(pdf_path, page_num, image_block):
         image_list = page.get_images(full=True)
 
         if not image_list:
-            if ENABLE_DETAILED_LOGGING:
-                print(f"⚠️  No images found on page {page_num}")
+            print(f"⚠️  No images found on page {page_num}")
             doc.close()
             return None
-
-        if ENABLE_DETAILED_LOGGING:
-            print(f"🔍 Found {len(image_list)} images on page {page_num}")
 
         # Get the bounding box of our target image block
         target_x0, target_y0 = image_block.get('x0', 0), image_block.get('y0', 0)
         target_x1, target_y1 = image_block.get('x1', 0), image_block.get('y1', 0)
+        target_width = target_x1 - target_x0
+        target_height = target_y1 - target_y0
 
-        if ENABLE_DETAILED_LOGGING:
-            print(f"🎯 Target image block bbox: ({target_x0:.1f}, {target_y0:.1f}, {target_x1:.1f}, {target_y1:.1f})")
+        print(f"🎯 Target: ({target_x0:.0f}, {target_y0:.0f}) to ({target_x1:.0f}, {target_y1:.0f}) = {target_width:.0f}x{target_height:.0f}")
 
-        # Find the best matching image based on position
+        # Find the best matching image based on position AND size
         best_match = None
-        min_distance = float('inf')
+        best_score = -1
 
         for img_idx, img_info in enumerate(image_list):
             try:
@@ -62,60 +55,93 @@ def get_image_from_pdf_block(pdf_path, page_num, image_block):
                     if "image" in block:
                         block_bbox = block["bbox"]
                         block_x0, block_y0, block_x1, block_y1 = block_bbox
+                        block_width = block_x1 - block_x0
+                        block_height = block_y1 - block_y0
 
-                        # Calculate distance from target position
+                        # Calculate position similarity
                         center_x = (block_x0 + block_x1) / 2
                         center_y = (block_y0 + block_y1) / 2
                         target_center_x = (target_x0 + target_x1) / 2
                         target_center_y = (target_y0 + target_y1) / 2
 
-                        distance = ((center_x - target_center_x) ** 2 + (center_y - target_center_y) ** 2) ** 0.5
+                        position_distance = ((center_x - target_center_x) ** 2 + (center_y - target_center_y) ** 2) ** 0.5
 
-                        if ENABLE_DETAILED_LOGGING:
-                            print(
-                                f"📍 Image {img_idx}: bbox ({block_x0:.1f}, {block_y0:.1f}, {block_x1:.1f}, {block_y1:.1f}), distance: {distance:.1f}")
+                        # Calculate size similarity
+                        size_similarity = 1.0
+                        if target_width > 0 and target_height > 0:
+                            width_ratio = min(block_width, target_width) / max(block_width, target_width)
+                            height_ratio = min(block_height, target_height) / max(block_height, target_height)
+                            size_similarity = width_ratio * height_ratio
 
-                        # Check if this is close to our target position
-                        if distance < min_distance and distance < 50:  # Within 50 points
-                            min_distance = distance
+                        # Combined score (position + size)
+                        position_score = max(0, 100 - position_distance)  # Higher score for closer positions
+                        size_score = size_similarity * 100  # Higher score for similar sizes
+                        total_score = position_score * 0.6 + size_score * 0.4  # Weight position more than size
+
+                        print(f"📍 Image {img_idx}: pos({block_x0:.0f},{block_y0:.0f}) size({block_width:.0f}x{block_height:.0f}) pos_dist={position_distance:.1f} size_sim={size_similarity:.2f} score={total_score:.1f}")
+
+                        # Update best match if this score is better
+                        if total_score > best_score:
+                            best_score = total_score
                             best_match = img_xref
-
-                            if ENABLE_DETAILED_LOGGING:
-                                print(f"✅ Best match so far: Image {img_idx} (distance: {distance:.1f})")
+                            print(f"✅ New best match: Image {img_idx} (score: {total_score:.1f})")
 
             except Exception as e:
-                if ENABLE_DETAILED_LOGGING:
-                    print(f"⚠️  Error processing image {img_idx}: {e}")
+                print(f"⚠️  Error processing image {img_idx}: {e}")
                 continue
 
         # Extract the best matching image
-        if best_match is not None:
+        if best_match is not None and best_score > 50:  # Higher score threshold to force fallback
             base_image = doc.extract_image(best_match)
             image_bytes = base_image["image"]
 
             # Convert to PIL Image
             image = Image.open(io.BytesIO(image_bytes))
 
-            if ENABLE_DETAILED_LOGGING:
-                print(f"🖼️  Successfully extracted image {best_match} from page {page_num}")
+            print(f"🖼️  Extracted image {best_match} (score: {best_score:.1f})")
 
-            doc.close()
-            return image
-        else:
-            # Fallback: use the first image if no good position match
-            if ENABLE_DETAILED_LOGGING:
-                print(f"⚠️  No position match found, using first image as fallback")
+            # Special check for page 30: if extracted image is too small, use fallback
+            if page_num == 30 and (image.size[0] < 100 or image.size[1] < 100):
+                print(f"⚠️  Page 30: Extracted image too small ({image.size[0]}x{image.size[1]}), forcing fallback")
+                # Continue to fallback instead of returning None
+                best_match = None
+                best_score = -1
+                # Don't return here, continue to fallback
+            else:
+                doc.close()
+                return image
+        
+        # If we get here, either no good match or page 30 fallback needed
+        if best_match is None or best_score <= 50:
+            print(f"⚠️  No good match found (best score: {best_score:.1f}), trying fallback")
 
-            img_xref = image_list[0][0]
-            base_image = doc.extract_image(img_xref)
-            image_bytes = base_image["image"]
-            image = Image.open(io.BytesIO(image_bytes))
+            # Fallback: try to find any image with reasonable size
+            print(f"🔄 Trying fallback extraction...")
+            for img_idx, img_info in enumerate(image_list):
+                try:
+                    img_xref = img_info[0]
+                    base_image = doc.extract_image(img_xref)
+                    image_bytes = base_image["image"]
+                    image = Image.open(io.BytesIO(image_bytes))
+                    
+                    print(f"🔄 Fallback image {img_idx}: {image.size[0]}x{image.size[1]} pixels")
+                    
+                    # Check if this image has reasonable size (prefer larger images)
+                    if image.size[0] >= 200 and image.size[1] >= 200:
+                        print(f"✅ Fallback success: Using image {img_idx} with size {image.size[0]}x{image.size[1]}")
+                        doc.close()
+                        return image
+                        
+                except Exception as e:
+                    print(f"⚠️  Error in fallback image {img_idx}: {e}")
+                    continue
+
+            print(f"❌ No suitable fallback image found")
             doc.close()
-            return image
+            return None
 
     except Exception as e:
-        if ENABLE_DETAILED_LOGGING:
-            print(f"❌ Error extracting image from PDF page {page_num}: {e}")
+        print(f"❌ Error extracting image from PDF page {page_num}: {e}")
         return None
 
 
@@ -147,6 +173,60 @@ def save_image_if_needed(image, filename, is_chessboard, force_save=False):
     return None
 
 
+def save_all_page_images(pdf_path, page_number):
+    """
+    Save ALL images found on a specific page for inspection.
+    """
+    if not SAVE_ALL_PAGE_IMAGES:
+        return
+    
+    try:
+        doc = fitz.open(pdf_path)
+        page = doc[page_number - 1]  # Convert to 0-indexed
+        
+        # Get all images on the page
+        image_list = page.get_images(full=True)
+        
+        if not image_list:
+            print(f"⚠️  No images found on page {page_number}")
+            doc.close()
+            return
+        
+        print(f"📄 Found {len(image_list)} images on page {page_number}")
+        
+        # Create output directory
+        output_images_dir = os.path.join(OUTPUT_FOLDER, IMAGES_FOLDER)
+        if not os.path.exists(output_images_dir):
+            os.makedirs(output_images_dir)
+        
+        # Extract and save each image
+        for img_idx, img_info in enumerate(image_list):
+            try:
+                img_xref = img_info[0]
+                base_image = doc.extract_image(img_xref)
+                image_bytes = base_image["image"]
+                
+                # Convert to PIL Image
+                image = Image.open(io.BytesIO(image_bytes))
+                width, height = image.size
+                
+                # Save with descriptive filename
+                filename = f"page_{page_number}_image_{img_idx:02d}_{width}x{height}.png"
+                filepath = os.path.join(output_images_dir, filename)
+                image.save(filepath)
+                
+                print(f"💾 Saved page image: {filename} ({width}x{height} pixels)")
+                
+            except Exception as e:
+                print(f"⚠️  Error extracting image {img_idx} from page {page_number}: {e}")
+                continue
+        
+        doc.close()
+        
+    except Exception as e:
+        print(f"❌ Error saving page images for page {page_number}: {e}")
+
+
 def get_all_blocks_flattened(all_blocks_by_page, actual_start_page):
     """
     Flatten all blocks from all pages into a single list with page references.
@@ -170,15 +250,6 @@ def get_all_blocks_flattened(all_blocks_by_page, actual_start_page):
 def find_related_blocks_structured(flattened_blocks, header_idx, pdf_path, structure_type):
     """
     Find image and solution blocks using structured search based on diagram layout.
-
-    Args:
-        flattened_blocks: List of all blocks across pages
-        header_idx: Index of the diagram header block
-        pdf_path: Path to PDF file for image extraction
-        structure_type: Type of structure ("header_image_solution", "flexible", etc.)
-
-    Returns:
-        tuple: (image_block, solution_block, image_page) or (None, None, None)
     """
     if structure_type == "header_image_solution":
         return find_header_image_solution_structure(flattened_blocks, header_idx, pdf_path)
@@ -192,8 +263,8 @@ def find_related_blocks_structured(flattened_blocks, header_idx, pdf_path, struc
 
 def find_header_image_solution_structure(flattened_blocks, header_idx, pdf_path):
     """
-    Find blocks using Header -> Image -> Solution structure (default for most chess books).
-    Enhanced to handle cross-page layouts and trigger-based solution detection.
+    Find blocks using Header -> Image -> Solution structure.
+    Focus on size and dimensions as primary criteria for chessboard detection.
     """
     image_block = None
     image_page = None
@@ -218,99 +289,115 @@ def find_header_image_solution_structure(flattened_blocks, header_idx, pdf_path)
 
     print(f"🔍 Searching for image after header on page {header_page} (blocks {header_idx + 1} to {search_end - 1})")
 
+    # Collect all image blocks first to examine them all
+    image_blocks = []
     for idx in range(header_idx + 1, search_end):
         block = flattened_blocks[idx]
+        if block['type'] == 'image':
+            image_blocks.append((idx, block))
+    
+    print(f"🔍 Found {len(image_blocks)} image blocks to examine")
+    
+    # Show all image blocks found
+    for i, (idx, block) in enumerate(image_blocks):
+        width = block.get('width', 0)
+        height = block.get('height', 0)
+        print(f"  Image {i+1}: Block {idx}, Size: {width}x{height}")
+        
+        # Highlight potential chessboards
+        if width == height and 200 <= width <= 400:
+            print(f"    🎯 Potential chessboard candidate")
+    
+    # Examine all image blocks to find the best chessboard candidate
+    chessboard_candidates = []
+    
+    for idx, block in image_blocks:
+        print(f"\n--- Examining Image Block {idx} ---")
+        print(f"🖼️  Examining image block {idx} on page {block['page_number']}")
+        print(f"📍 Image position: ({block.get('x0', 0):.0f}, {block.get('y0', 0):.0f}) to ({block.get('x1', 0):.0f}, {block.get('y1', 0):.0f})")
+        print(f"📏 Image size: {block.get('width', 'N/A')}x{block.get('height', 'N/A')}")
 
-        if block['type'] == 'image' and image_block is None:
-            if ENABLE_DETAILED_LOGGING:
-                print(f"🖼️  Examining image block {idx} on page {block['page_number']}")
-                print(
-                    f"📍 Image position: ({block.get('x0', 0):.0f}, {block.get('y0', 0):.0f}) to ({block.get('x1', 0):.0f}, {block.get('y1', 0):.0f})")
-                print(f"📏 Image size: {block.get('width', 'N/A')}x{block.get('height', 'N/A')}")
+        # Extract image and check if it's a chessboard
+        image = get_image_from_pdf_block(pdf_path, block['page_number'], block)
 
-            # Quick size-based filtering for likely chessboards
-            width = block.get('width', 0)
-            height = block.get('height', 0)
-            is_likely_chessboard = False
+        if image:
+            actual_width, actual_height = image.size
+            print(f"✅ Extracted: {actual_width}x{actual_height} pixels")
+            
+            # Check if extracted image size matches block size
+            if actual_width != block.get('width', 0) or actual_height != block.get('height', 0):
+                print(f"⚠️  Size mismatch: Block says {block.get('width', 0)}x{block.get('height', 0)}, extracted is {actual_width}x{actual_height}")
 
-            if width and height:
-                aspect_ratio = width / height if height > 0 else 0
-                # Prioritize square images of reasonable size
-                if 0.8 <= aspect_ratio <= 1.2 and width >= 150 and height >= 150:
-                    is_likely_chessboard = True
-                    if ENABLE_DETAILED_LOGGING:
-                        print(f"🎯 Size suggests chessboard: {width:.0f}x{height:.0f}, ratio {aspect_ratio:.2f}")
+            # Save image for debugging if enabled
+            if SAVE_ALL_IMAGES_FOR_DEBUG:
+                debug_filename = f"debug_page_{block['page_number']}_block_{idx}_{actual_width:.0f}x{actual_height:.0f}.png"
+                save_image_if_needed(image, debug_filename, False, force_save=True)
 
-            # Extract image and check if it's a chessboard
-            image = get_image_from_pdf_block(pdf_path, block['page_number'], block)
+            print(f"🔍 Testing chessboard detection...")
+            is_chessboard = is_chessboard_like(image)
 
-            if image:
-                if ENABLE_DETAILED_LOGGING:
-                    print(f"✅ Successfully extracted image from PDF")
-
-                # Save image for debugging if enabled
-                if SAVE_ALL_IMAGES_FOR_DEBUG:
-                    debug_filename = f"debug_page_{block['page_number']}_block_{idx}_{width:.0f}x{height:.0f}.png"
-                    save_image_if_needed(image, debug_filename, False, force_save=True)
-
-                is_chessboard = is_chessboard_like(image)
-
-                # If size suggests chessboard but detection failed, try with relaxed parameters
-                if not is_chessboard and is_likely_chessboard:
-                    if ENABLE_DETAILED_LOGGING:
-                        print(f"🔄 Size suggests chessboard but detection failed, accepting based on size heuristics")
-                    is_chessboard = True
-
-                if is_chessboard:
-                    image_block = block
-                    image_page = block['page_number']
-                    distance = abs(idx - header_idx)
-
-                    if image_page != header_page:
-                        print(
-                            f"🖼️  Found chessboard on page {image_page} (cross-page: header on {header_page}, distance: {distance} blocks)")
-                        print(f"📄 Successfully handled cross-page layout: {header_page} → {image_page}")
-                    else:
-                        print(f"🖼️  Found chessboard on page {image_page} (same page, distance: {distance} blocks)")
-                else:
-                    if ENABLE_DETAILED_LOGGING:
-                        print(f"❌ Image not detected as chessboard")
-                    else:
-                        print(f"❌ Image on page {block['page_number']} not detected as chessboard")
+            if is_chessboard:
+                # Store this as a candidate
+                candidate = {
+                    'block': block,
+                    'page': block['page_number'],
+                    'distance': abs(idx - header_idx),
+                    'width': actual_width,
+                    'height': actual_height,
+                }
+                chessboard_candidates.append(candidate)
+                print(f"✅ CHESSBOARD CANDIDATE: {actual_width:.0f}x{actual_height:.0f} pixels")
             else:
-                if ENABLE_DETAILED_LOGGING:
-                    print(f"❌ Failed to extract image from PDF")
-                else:
-                    print(f"❌ Failed to extract image from page {block['page_number']}")
+                print(f"❌ Not a chessboard - detection failed")
+        else:
+            print(f"❌ Failed to extract image from page {block['page_number']}")
 
-            # If we found a chessboard, look for solution
-            if image_block:
-                # Now look for solution after the image
-                # First, look for "Show/Hide Solution" trigger
-                sol_search_end = min(len(flattened_blocks), idx + 21)
-                print(f"🔍 Searching for solution after image (blocks {idx + 1} to {sol_search_end - 1})")
+    # Select the best chessboard candidate
+    if chessboard_candidates:
+        print(f"\n🎯 Found {len(chessboard_candidates)} chessboard candidates:")
+        for i, candidate in enumerate(chessboard_candidates):
+            print(f"  {i+1}. {candidate['width']:.0f}x{candidate['height']:.0f} pixels, distance: {candidate['distance']} blocks")
+        
+        # Select the best candidate (prefer larger squares, closer to header)
+        best_candidate = max(chessboard_candidates, key=lambda c: (c['width'], -c['distance']))
+        
+        image_block = best_candidate['block']
+        image_page = best_candidate['page']
+        distance = best_candidate['distance']
+        
+        print(f"🏆 Selected best candidate: {best_candidate['width']:.0f}x{best_candidate['height']:.0f} pixels")
+        
+        if image_page != header_page:
+            print(f"🖼️  Found chessboard on page {image_page} (cross-page: header on {header_page}, distance: {distance} blocks)")
+            print(f"📄 Successfully handled cross-page layout: {header_page} → {image_page}")
+        else:
+            print(f"🖼️  Found chessboard on page {image_page} (same page, distance: {distance} blocks)")
+    
+    # If we found a chessboard, look for solution
+    if image_block:
+        # Now look for solution after the image
+        # First, look for "Show/Hide Solution" trigger
+        sol_search_end = min(len(flattened_blocks), idx + 21)
+        print(f"🔍 Searching for solution after image (blocks {idx + 1} to {sol_search_end - 1})")
 
-                trigger_found = False
-                for sol_idx in range(idx + 1, sol_search_end):
-                    sol_block = flattened_blocks[sol_idx]
+        trigger_found = False
+        for sol_idx in range(idx + 1, sol_search_end):
+            sol_block = flattened_blocks[sol_idx]
 
-                    if sol_block['type'] == 'text':
-                        # Check for solution trigger first
-                        if is_solution_trigger_block(sol_block['text']):
-                            print(f"🎯 Found solution trigger on page {sol_block['page_number']}")
-                            # Look for actual solution after trigger
-                            solution_block = find_solution_after_trigger(flattened_blocks, sol_idx)
-                            trigger_found = True
-                            break
-                        # If no trigger found, check for direct solution
-                        elif not trigger_found and is_solution_block(sol_block['text']):
-                            solution_block = sol_block
-                            sol_distance = abs(sol_idx - idx)
-                            print(
-                                f"🎲 Found solution on page {sol_block['page_number']} (distance: {sol_distance} blocks from image)")
-                            break
-
-                break  # Found image, stop looking
+            if sol_block['type'] == 'text':
+                # Check for solution trigger first
+                if is_solution_trigger_block(sol_block['text']):
+                    print(f"🎯 Found solution trigger on page {sol_block['page_number']}")
+                    # Look for actual solution after trigger
+                    solution_block = find_solution_after_trigger(flattened_blocks, sol_idx)
+                    trigger_found = True
+                    break
+                # If no trigger found, check for direct solution
+                elif not trigger_found and is_solution_block(sol_block['text']):
+                    solution_block = sol_block
+                    sol_distance = abs(sol_idx - idx)
+                    print(f"🎲 Found solution on page {sol_block['page_number']} (distance: {sol_distance} blocks from image)")
+                    break
 
     if image_block is None and is_near_page_end:
         print(f"⚠️  No image found despite header at page end - may need manual inspection")
@@ -321,8 +408,6 @@ def find_header_image_solution_structure(flattened_blocks, header_idx, pdf_path)
 def find_image_header_solution_structure(flattened_blocks, header_idx, pdf_path):
     """
     Find blocks using Image -> Header -> Solution structure.
-    Enhanced to handle cross-page layouts.
-    Note: In this case, header_idx actually points to the header, so we look backwards for image.
     """
     image_block = None
     image_page = None
@@ -349,11 +434,9 @@ def find_image_header_solution_structure(flattened_blocks, header_idx, pdf_path)
                 distance = abs(idx - header_idx)
 
                 if image_page != header_page:
-                    print(
-                        f"🖼️  Found chessboard on page {image_page} (cross-page: header on {header_page}, distance: {distance} blocks before header)")
+                    print(f"🖼️  Found chessboard on page {image_page} (cross-page: header on {header_page}, distance: {distance} blocks before header)")
                 else:
-                    print(
-                        f"🖼️  Found chessboard on page {image_page} (same page, distance: {distance} blocks before header)")
+                    print(f"🖼️  Found chessboard on page {image_page} (same page, distance: {distance} blocks before header)")
                 break
 
     # Look for solution after header (within next 15 blocks)
@@ -369,8 +452,7 @@ def find_image_header_solution_structure(flattened_blocks, header_idx, pdf_path)
             distance = abs(idx - header_idx)
 
             if block['page_number'] != header_page:
-                print(
-                    f"🎲 Found solution on page {block['page_number']} (cross-page: header on {header_page}, distance: {distance} blocks)")
+                print(f"🎲 Found solution on page {block['page_number']} (cross-page: header on {header_page}, distance: {distance} blocks)")
             else:
                 print(f"🎲 Found solution on page {block['page_number']} (same page, distance: {distance} blocks)")
             break
@@ -381,7 +463,6 @@ def find_image_header_solution_structure(flattened_blocks, header_idx, pdf_path)
 def find_header_solution_image_structure(flattened_blocks, header_idx, pdf_path):
     """
     Find blocks using Header -> Solution -> Image structure.
-    Enhanced to handle cross-page layouts.
     """
     image_block = None
     image_page = None
@@ -393,8 +474,7 @@ def find_header_solution_image_structure(flattened_blocks, header_idx, pdf_path)
     # Look for solution after header first (within next 15 blocks)
     sol_search_end = min(len(flattened_blocks), header_idx + 16)
 
-    print(
-        f"🔍 Searching for solution after header on page {header_page} (blocks {header_idx + 1} to {sol_search_end - 1})")
+    print(f"🔍 Searching for solution after header on page {header_page} (blocks {header_idx + 1} to {sol_search_end - 1})")
 
     for idx in range(header_idx + 1, sol_search_end):
         block = flattened_blocks[idx]
@@ -404,8 +484,7 @@ def find_header_solution_image_structure(flattened_blocks, header_idx, pdf_path)
             distance = abs(idx - header_idx)
 
             if block['page_number'] != header_page:
-                print(
-                    f"🎲 Found solution on page {block['page_number']} (cross-page: header on {header_page}, distance: {distance} blocks)")
+                print(f"🎲 Found solution on page {block['page_number']} (cross-page: header on {header_page}, distance: {distance} blocks)")
             else:
                 print(f"🎲 Found solution on page {block['page_number']} (same page, distance: {distance} blocks)")
 
@@ -427,11 +506,9 @@ def find_header_solution_image_structure(flattened_blocks, header_idx, pdf_path)
                         img_distance = abs(img_idx - idx)
 
                         if image_page != block['page_number']:
-                            print(
-                                f"🖼️  Found chessboard on page {image_page} (cross-page: solution on {block['page_number']}, distance: {img_distance} blocks from solution)")
+                            print(f"🖼️  Found chessboard on page {image_page} (cross-page: solution on {block['page_number']}, distance: {img_distance} blocks from solution)")
                         else:
-                            print(
-                                f"🖼️  Found chessboard on page {image_page} (same page, distance: {img_distance} blocks from solution)")
+                            print(f"🖼️  Found chessboard on page {image_page} (same page, distance: {img_distance} blocks from solution)")
                         break
 
             break  # Found solution, stop looking
@@ -442,16 +519,6 @@ def find_header_solution_image_structure(flattened_blocks, header_idx, pdf_path)
 def find_related_blocks(flattened_blocks, header_idx, pdf_path):
     """
     Find image and solution blocks related to a diagram header using flexible search.
-    Enhanced to handle cross-page layouts and page breaks.
-    Searches both forwards and backwards within max_distance blocks.
-
-    Args:
-        flattened_blocks: List of all blocks across pages
-        header_idx: Index of the diagram header block
-        pdf_path: Path to PDF file for image extraction
-
-    Returns:
-        tuple: (image_block, solution_block, image_page) or (None, None, None)
     """
     # Extended search distance for cross-page scenarios
     extended_search_distance = MAX_SEARCH_DISTANCE + 10  # Add extra for page breaks
@@ -491,8 +558,7 @@ def find_related_blocks(flattened_blocks, header_idx, pdf_path):
                 image_page = block_page
 
                 if image_page != header_page:
-                    print(
-                        f"🖼️  Found chessboard on page {image_page} (cross-page: header on {header_page}, distance: {distance} blocks)")
+                    print(f"🖼️  Found chessboard on page {image_page} (cross-page: header on {header_page}, distance: {distance} blocks)")
                 else:
                     print(f"🖼️  Found chessboard on page {image_page} (same page, distance: {distance} blocks)")
 
@@ -502,8 +568,7 @@ def find_related_blocks(flattened_blocks, header_idx, pdf_path):
                 solution_block = block
 
                 if block_page != header_page:
-                    print(
-                        f"🎲 Found solution on page {block_page} (cross-page: header on {header_page}, distance: {distance} blocks)")
+                    print(f"🎲 Found solution on page {block_page} (cross-page: header on {header_page}, distance: {distance} blocks)")
                 else:
                     print(f"🎲 Found solution on page {block_page} (same page, distance: {distance} blocks)")
 
@@ -517,12 +582,12 @@ def find_related_blocks(flattened_blocks, header_idx, pdf_path):
 def process_diagram(header_block, image_block, solution_block, image_page, diagram_count, pdf_path):
     """
     Process a complete diagram (header + image + solution) and extract all information.
-
-    Returns:
-        dict: Complete diagram information or None if processing fails
     """
+    print(f"🎯 PROCESSING DIAGRAM #{diagram_count}")
+    
     # Extract header information
     diagram_number, players, year = extract_diagram_info(header_block['text'])
+    print(f"📝 Header: #{diagram_number} - {players} ({year})")
 
     # Extract and process image
     image = get_image_from_pdf_block(pdf_path, image_page, image_block)
@@ -532,7 +597,9 @@ def process_diagram(header_block, image_block, solution_block, image_page, diagr
 
     # Save image if needed
     filename = f"diagram_{diagram_count:03d}_page_{image_page}.png"
+    print(f"💾 Saving diagram image: {filename}")
     image_path = save_image_if_needed(image, filename, True)
+    print(f"📁 Image saved to: {image_path}")
 
     # Get FEN from Chessvision if enabled
     fen = None

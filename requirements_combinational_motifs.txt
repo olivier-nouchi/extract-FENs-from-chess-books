@@ -1,0 +1,26 @@
+# Requirements for Combinational Motifs Processor
+# Core dependencies for PDF processing and image analysis
+
+# PDF processing
+PyMuPDF==1.23.8
+fitz==0.0.1.dev2
+
+# Image processing and computer vision
+opencv-python==4.8.1.78
+Pillow==10.0.1
+numpy==1.24.3
+
+# OCR for bubble number extraction
+pytesseract==0.3.10
+
+# Additional dependencies for better OCR
+# Note: You may need to install tesseract-ocr on your system:
+# macOS: brew install tesseract
+# Ubuntu/Debian: sudo apt-get install tesseract-ocr
+# Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki
+
+# Data processing
+pandas==2.0.3
+
+# Optional: For better image preprocessing
+scikit-image==0.21.0 
